@@ -480,6 +480,186 @@ python main.py -m models/моя_модель.pth -i фото.jpg
   └─────────────────────────────────────────────────────────────────────┘
 ```
 
+СХЕМА ВЗАИМОДЕЙСТВИЯ КОМПОНЕНТОВ СИСТЕМЫ
+```
+СИСТЕМА РАСПОЗНАВАНИЯ ЭМОЦИЙ
+═══════════════════════════════════════════════════════════
+
+ЭТАП 1: ОБУЧЕНИЕ
+────────────────
+
+ДАТАСЕТ FER-2013
+    │
+    ├─ train/ (28,709 изображений)
+    │   ├─ angry/
+    │   ├─ disgust/
+    │   ├─ fear/
+    │   ├─ happy/
+    │   ├─ neutral/
+    │   ├─ sad/
+    │   └─ surprise/
+    │
+    └─ test/ (7,178 изображений)
+        └─ *.jpg
+    
+    ↓ Загрузка
+    
+EmotionDataset (PyTorch)
+    ├─ Чтение изображений
+    ├─ Преобразование в grayscale
+    ├─ Resize до 48x48
+    ├─ Аугментация (опционально)
+    └─ Нормализация
+    
+    ↓ Батчи
+    
+DataLoader
+    ├─ Batch size: 128
+    ├─ Shuffle: True
+    ├─ Num workers: 4
+    └─ Pin memory: True (GPU)
+    
+    ↓ Тензоры [128, 1, 48, 48]
+    
+МОДЕЛЬ BaseCNN
+    │
+    ├─ Features (Сверточные слои)
+    │   ├─ Conv2d(1→64) + BatchNorm + ReLU + MaxPool
+    │   ├─ Conv2d(64→128) + BatchNorm + ReLU + MaxPool
+    │   ├─ Conv2d(128→256) + BatchNorm + ReLU + MaxPool
+    │   └─ Conv2d(256→512) + BatchNorm + ReLU + MaxPool
+    │
+    ├─ AdaptiveAvgPool2d(3x3)
+    │
+    └─ Classifier (Полносвязные слои)
+        ├─ Dropout(0.5)
+        ├─ Linear(4608→512) + ReLU
+        ├─ Dropout(0.5)
+        └─ Linear(512→7)
+    
+    ↓ Предсказания [128, 7]
+    
+ОБУЧЕНИЕ
+    │
+    ├─ Loss: CrossEntropyLoss
+    ├─ Optimizer: AdamW (lr=0.001)
+    ├─ Scheduler: ReduceLROnPlateau
+    └─ Early Stopping (patience=10)
+    
+    ↓ После обучения
+    
+ОЦЕНКА
+    ├─ Accuracy
+    ├─ F1-score
+    ├─ Confusion Matrix
+    └─ ROC-кривые
+    
+    ↓ Сохранение
+    
+РЕЗУЛЬТАТЫ
+    ├─ Arkhipov_F1_model.pth (~45 MB)
+    ├─ confusion_matrix.png
+    ├─ roc_curves.png
+    └─ metrics_report.txt
+
+
+ЭТАП 2: ИНФЕРЕНС (ИСПОЛЬЗОВАНИЕ)
+─────────────────────────────────
+
+ИСТОЧНИК ДАННЫХ              ОБУЧЕННАЯ МОДЕЛЬ
+    │                            │
+    ├─ Файл изображения          ├─ Arkhipov_F1_model.pth
+    └─ Веб-камера                └─ Веса нейронной сети
+    
+    ↓ Кадр/Изображение           ↓ Загрузка
+    
+OpenCV                       EmotionCNN
+    ├─ cv2.imread()              ├─ Режим eval()
+    ├─ cv2.VideoCapture()        └─ torch.no_grad()
+    └─ Конвертация в grayscale
+    
+    ↓ Изображение
+    
+Детектор лиц (Haar Cascade)
+    ├─ detectMultiScale()
+    ├─ scaleFactor=1.1
+    ├─ minNeighbors=5
+    └─ minSize=(30,30)
+    
+    ↓ Координаты лиц [(x,y,w,h), ...]
+    
+Для каждого лица:
+    │
+    ├─ Извлечение ROI
+    │   face_roi = gray[y:y+h, x:x+w]
+    │
+    ├─ Предобработка
+    │   ├─ Resize(48x48)
+    │   ├─ Normalize
+    │   └─ ToTensor [1,1,48,48]
+    │
+    ├─ Модель → Forward Pass
+    │   ├─ Features extraction
+    │   ├─ Classification
+    │   └─ Softmax → Вероятности [1,7]
+    │
+    ├─ argmax → Индекс класса (0-6)
+    │
+    └─ Маппинг → Название эмоции
+    
+    ↓ Результат
+    
+ВЫВОД
+    ├─ Визуализация
+    │   ├─ Прямоугольник вокруг лица
+    │   └─ Текст: "emotion: XX.X%"
+    │
+    └─ Консоль
+        ├─ Лицо #1
+        ├─ Эмоция: happy
+        └─ Точность: 87.3%
+```
+
+РЕЖИМ ВЕБ-КАМЕРЫ
+
+```
+РЕЖИМ ВЕБ-КАМЕРЫ
+════════════════
+
+Веб-камера (USB/Встроенная)
+    ↓ Видеопоток 30 FPS
+    
+OpenCV VideoCapture
+    ├─ cap = cv2.VideoCapture(0)
+    └─ ret, frame = cap.read()
+    
+    ↓ Кадр (640x480 или выше)
+    
+Отображение живого видео
+    └─ cv2.imshow('Camera', frame)
+    
+    ↓ Ожидание клавиши
+    
+cv2.waitKey(1)
+    │
+    ├─ ПРОБЕЛ нажат?
+    │   │
+    │   └─ ДА → Захват кадра
+    │       │
+    │       ├─ Детекция лиц
+    │       ├─ Распознавание эмоций
+    │       ├─ Отрисовка результатов
+    │       └─ Показ 3 секунды
+    │
+    ├─ ESC нажат?
+    │   └─ ДА → Выход
+    │
+    └─ Другая клавиша → Продолжить
+    
+    ↓ Цикл продолжается
+    
+Возврат к живому видео
+```
 Сверточная сеть с 4 блоками:
 - Блок 1: 1 → 64 канала
 - Блок 2: 64 → 128
