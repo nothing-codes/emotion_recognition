@@ -8,10 +8,10 @@ import torch
 import torch.nn as nn
 
 
-# Emotions
+# Эмоции
 EMOTIONS = ['angry', 'disgust', 'fear', 'happy', 'neutral', 'sad', 'surprise']
 
-# Path
+# Путь к модели
 DEFAULT_MODEL_PATH = 'models/Arkhipov_F1_model.pth'
 
 
@@ -64,7 +64,7 @@ def load_model(model_path=DEFAULT_MODEL_PATH):
             f"Сначала надо обучить модель!"
         )
     
-    # GPU if available, otherwise CPU
+    # GPU если доступен, иначе CPU
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     try:
@@ -76,9 +76,9 @@ def load_model(model_path=DEFAULT_MODEL_PATH):
     except Exception as e:
         raise RuntimeError(f"Ошибка загрузки модели: {e}")
 
-# Preprocessing
+# Предобработка изображения лица
 def preprocess_face(face_img):
-    # Resize to 48x48
+    # Изменение размера до 48x48
     face_resized = cv2.resize(face_img, (48, 48))
     
     face_normalized = face_resized / 255.0
@@ -88,7 +88,7 @@ def preprocess_face(face_img):
     
     return face_tensor
 
-# Prediction
+# Предсказание эмоции
 def predict_emotion(model, face_img, device):
     face_tensor = preprocess_face(face_img).to(device)
     
@@ -156,7 +156,7 @@ def process_image_file(image_path, model, device, face_cascade):
     
     return True
 
-# Parsing
+# Парсинг аргументов командной строки
 def parse_arguments():
     parser = argparse.ArgumentParser(
         description='Emotion Recognition',
@@ -170,14 +170,14 @@ def parse_arguments():
     
     return parser.parse_args()
 
-# MAIN FUNCTION
+# ГЛАВНАЯ ФУНКЦИЯ
 def main():
     args = parse_arguments()
     
     print("РАСПОЗНАВАНИЕ ЭМОЦИЙ")
     print("by nothing_codes")
     
-    # Load model
+    # Загрузка модели
     print("\nЗагружаю нейронку...")
     print(f"   Модель: {args.model}")
     
@@ -227,6 +227,9 @@ def run_camera_mode(model, device, face_cascade):
     print("  ESC    - выход\n")
     
     try:
+        result_frame = None
+        show_result_until = 0
+        
         while True:
             ret, frame = cap.read()
             
@@ -234,10 +237,18 @@ def run_camera_mode(model, device, face_cascade):
                 print("Ошибка чтения с камеры")
                 break
             
-            cv2.imshow('Camera - SPACE: photo, ESC: exit', frame)
+            # Показываем результат если есть
+            current_time = time.time()
+            if result_frame is not None and current_time < show_result_until:
+                display_frame = result_frame
+            else:
+                display_frame = frame
+                result_frame = None
+            
+            cv2.imshow('Camera - SPACE: photo, ESC: exit', display_frame)
             key = cv2.waitKey(1) & 0xFF
             
-            # SPACE
+            # ПРОБЕЛ
             if key == 32:
                 print("\nОбработка...")
                 start_time = time.time()
@@ -251,6 +262,9 @@ def run_camera_mode(model, device, face_cascade):
                     print(f"Найдено лиц: {len(faces)}")
                     print("  Результаты")
                     
+                    # Создаем копию кадра для результата
+                    result_frame = frame.copy()
+                    
                     for i, (x, y, w, h) in enumerate(faces):
                         face_roi = gray[y:y+h, x:x+w]
                         emotion, confidence = predict_emotion(model, face_roi, device)
@@ -259,15 +273,15 @@ def run_camera_mode(model, device, face_cascade):
                         print(f"  Эмоция:      {emotion}")
                         print(f"  Точность: {confidence:.1f}%")
                         
-                        cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                        cv2.rectangle(result_frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
                         text = f"{emotion}: {confidence:.1f}%"
-                        cv2.putText(frame, text, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                        cv2.putText(result_frame, text, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                     
                     processing_time = time.time() - start_time
                     print(f"\nВремя: {processing_time:.3f} сек\n")
                     
-                    cv2.imshow('Result - Press any key', frame)
-                    cv2.waitKey(0)
+                    # Показываем результат 3 секунды
+                    show_result_until = time.time() + 3.0
             
             # ESC
             elif key == 27:
@@ -287,6 +301,6 @@ def run_camera_mode(model, device, face_cascade):
     return 0
 
 
-# Entry point
+# Точка входа в программу
 if __name__ == '__main__':
     sys.exit(main())
