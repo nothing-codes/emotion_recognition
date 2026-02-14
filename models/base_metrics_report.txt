@@ -40,3 +40,4 @@ AUC (Area Under ROC Curve) по классам:
 
   Средний AUC: 0.8666
 
+
