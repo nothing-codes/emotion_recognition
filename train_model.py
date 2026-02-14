@@ -14,7 +14,6 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as transforms
 from PIL import Image
-from tqdm import tqdm
 import warnings
 import time
 from datetime import datetime
@@ -59,34 +58,45 @@ def parse_arguments():
 
 # FER-2013
 class EmotionDataset(Dataset):
-    """Датасет для загрузки фоток эмоций"""
     
-    def __init__(self, root_dir, transform=None):
+    def __init__(self, root_dir, transform=None, is_test=False):
         self.root_dir = root_dir
         self.transform = transform
+        self.is_test = is_test
         self.images = []
         self.labels = []
         
-        # Загружаем пути к фоткам
-        for idx, emotion in enumerate(EMOTIONS):
-            emotion_dir = os.path.join(root_dir, emotion)
-            if not os.path.exists(emotion_dir):
-                print(f"[!] Папка не найдена: {emotion_dir}")
-                continue
-            
-            img_files = [f for f in os.listdir(emotion_dir) 
+        if is_test:
+            # Для тестовой папки - все фотки лежат без подпапок
+            img_files = [f for f in os.listdir(root_dir) 
                         if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
             
             for img_name in img_files:
-                self.images.append(os.path.join(emotion_dir, img_name))
-                self.labels.append(idx)
-        
-        print(f"[+] Загружено {len(self.images)} фоток из {root_dir}")
-        
-        # Статистика
-        unique, counts = np.unique(self.labels, return_counts=True)
-        for emotion_idx, count in zip(unique, counts):
-            print(f"  {EMOTIONS[emotion_idx]}: {count} шт")
+                self.images.append(os.path.join(root_dir, img_name))
+                self.labels.append(0)  # Dummy label для теста
+            
+            print(f" Загружено {len(self.images)} фоток из {root_dir}")
+        else:
+            # Загружаем пути к фоткам
+            for idx, emotion in enumerate(EMOTIONS):
+                emotion_dir = os.path.join(root_dir, emotion)
+                if not os.path.exists(emotion_dir):
+                    print(f"[!] Папка не найдена: {emotion_dir}")
+                    continue
+                
+                img_files = [f for f in os.listdir(emotion_dir) 
+                            if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+                
+                for img_name in img_files:
+                    self.images.append(os.path.join(emotion_dir, img_name))
+                    self.labels.append(idx)
+            
+            print(f" Загружено {len(self.images)} фоток из {root_dir}")
+            
+            # Статистика
+            unique, counts = np.unique(self.labels, return_counts=True)
+            for emotion_idx, count in zip(unique, counts):
+                print(f"  {EMOTIONS[emotion_idx]}: {count} шт")
     
     def __len__(self):
         return len(self.images)
@@ -107,7 +117,6 @@ class EmotionDataset(Dataset):
 
 # Архитектура
 class BaseCNN(nn.Module):
-    """Базовая CNN для распознавания эмоций"""
     
     def __init__(self, num_classes=7, dropout_rate=0.5):
         super(BaseCNN, self).__init__()
@@ -117,38 +126,19 @@ class BaseCNN(nn.Module):
             nn.Conv2d(1, 64, 3, padding=1),
             nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
-            nn.Conv2d(64, 64, 3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
             nn.MaxPool2d(2, 2),
-            nn.Dropout2d(0.25),
-            
-            # Блок 2
             nn.Conv2d(64, 128, 3, padding=1),
             nn.BatchNorm2d(128),
             nn.ReLU(inplace=True),
-            nn.Conv2d(128, 128, 3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True),
             nn.MaxPool2d(2, 2),
-            nn.Dropout2d(0.25),
-            
-            # Блок 3
             nn.Conv2d(128, 256, 3, padding=1),
             nn.BatchNorm2d(256),
             nn.ReLU(inplace=True),
-            nn.Conv2d(256, 256, 3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True),
             nn.MaxPool2d(2, 2),
-            nn.Dropout2d(0.25),
-            
-            # Блок 4
             nn.Conv2d(256, 512, 3, padding=1),
             nn.BatchNorm2d(512),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2, 2),
-            nn.Dropout2d(0.25),
         )
         
         self.avgpool = nn.AdaptiveAvgPool2d((3, 3))
@@ -156,14 +146,9 @@ class BaseCNN(nn.Module):
         self.classifier = nn.Sequential(
             nn.Dropout(dropout_rate),
             nn.Linear(512 * 3 * 3, 512),
-            nn.BatchNorm1d(512),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout_rate),
-            nn.Linear(512, 256),
-            nn.BatchNorm1d(256),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout_rate * 0.5),
-            nn.Linear(256, num_classes)
+            nn.Linear(512, num_classes)
         )
     
     def forward(self, x):
@@ -176,7 +161,6 @@ class BaseCNN(nn.Module):
 
 # Трансформация
 def get_transforms(augment=False):
-    """Трансформации для фоток"""
     if augment:
         return transforms.Compose([
             transforms.Resize((IMG_SIZE, IMG_SIZE)),
@@ -196,16 +180,15 @@ def get_transforms(augment=False):
         ])
 
 
-# обучение
+# Обучение
 def train_epoch(model, train_loader, criterion, optimizer, device, scaler=None):
-    """Обучение на первом круге"""
     model.train()
     running_loss = 0.0
     correct = 0
     total = 0
     
-    pbar = tqdm(train_loader, desc="Обучение", leave=False)
-    for images, labels in pbar:
+    total_batches = len(train_loader)
+    for batch_idx, (images, labels) in enumerate(train_loader):
         images, labels = images.to(device, non_blocking=True), labels.to(device, non_blocking=True)
         
         optimizer.zero_grad(set_to_none=True)
@@ -230,8 +213,12 @@ def train_epoch(model, train_loader, criterion, optimizer, device, scaler=None):
         total += labels.size(0)
         correct += predicted.eq(labels).sum().item()
         
-        pbar.set_postfix({'loss': f'{loss.item():.4f}', 'acc': f'{100.*correct/total:.2f}%'})
+        # Вывод прогресса каждые 10%
+        progress = (batch_idx + 1) / total_batches * 100
+        if (batch_idx + 1) % max(1, total_batches // 10) == 0 or batch_idx == total_batches - 1:
+            print(f"\r  Прогресс: {progress:.0f}% | Loss: {loss.item():.4f} | Acc: {100.*correct/total:.2f}%", end='')
     
+    print()  # Новая строка после завершения
     epoch_loss = running_loss / len(train_loader)
     epoch_acc = 100. * correct / total
     return epoch_loss, epoch_acc
@@ -239,14 +226,14 @@ def train_epoch(model, train_loader, criterion, optimizer, device, scaler=None):
 
 # Оценка
 def evaluate_model(model, test_loader, device):
-    """Оценка модели"""
     model.eval()
     all_preds = []
     all_labels = []
     all_probs = []
     
+    total_batches = len(test_loader)
     with torch.no_grad():
-        for images, labels in tqdm(test_loader, desc="Оценка", leave=False):
+        for batch_idx, (images, labels) in enumerate(test_loader):
             images = images.to(device, non_blocking=True)
             outputs = model(images)
             probs = torch.softmax(outputs, dim=1)
@@ -255,13 +242,18 @@ def evaluate_model(model, test_loader, device):
             all_preds.extend(predicted.cpu().numpy())
             all_labels.extend(labels.numpy())
             all_probs.extend(probs.cpu().numpy())
+            
+            # Вывод прогресса каждые 10%
+            progress = (batch_idx + 1) / total_batches * 100
+            if (batch_idx + 1) % max(1, total_batches // 10) == 0 or batch_idx == total_batches - 1:
+                print(f"\r  Оценка: {progress:.0f}%", end='')
     
+    print()  # Новая строка после завершения
     return np.array(all_preds), np.array(all_labels), np.array(all_probs)
 
 
 # Матрица и График
 def plot_confusion_matrix(y_true, y_pred, save_path, title='Confusion Matrix'):
-    """Рисует матрицу ошибок"""
     cm = confusion_matrix(y_true, y_pred)
     
     plt.figure(figsize=(12, 10))
@@ -274,11 +266,10 @@ def plot_confusion_matrix(y_true, y_pred, save_path, title='Confusion Matrix'):
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"[+] Сохранено: {save_path}")
+    print(f" Сохранено: {save_path}")
 
-
+# Графики
 def plot_roc_curves(y_true, y_probs, save_path, title='ROC Curves'):
-    """Рисует ROC-кривые"""
     y_true_bin = label_binarize(y_true, classes=range(NUM_CLASSES))
     
     plt.figure(figsize=(12, 10))
@@ -301,20 +292,16 @@ def plot_roc_curves(y_true, y_probs, save_path, title='ROC Curves'):
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"[+] Сохранено: {save_path}")
+    print(f" Сохранено: {save_path}")
 
 
 def print_metrics(y_true, y_pred, model_name):
-    """Выводит метрики"""
     accuracy = accuracy_score(y_true, y_pred)
     f1 = f1_score(y_true, y_pred, average='weighted')
     
-    print(f"\n{'='*70}")
-    print(f"  МЕТРИКИ: {model_name}")
-    print(f"{'='*70}")
+    print(f"\nМЕТРИКИ: {model_name}")
     print(f"Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
     print(f"F1-score: {f1:.4f}")
-    print(f"{'='*70}")
     
     print("\nДетально по классам:")
     print(classification_report(y_true, y_pred, target_names=EMOTIONS, digits=4))
@@ -324,14 +311,11 @@ def print_metrics(y_true, y_pred, model_name):
 
 # ОСНОВНАЯ ФУНКЦИЯ
 def main():
-    """Главная функция обучения"""
     args = parse_arguments()
     DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    print("="*70)
-    print("  ОБУЧЕНИЕ НЕЙРОНКИ")
-    print("  by nothing_codes")
-    print("="*70)
+    print("ОБУЧЕНИЕ НЕЙРОНКИ")
+    print("by nothing_codes")
     print(f"Устройство: {DEVICE}")
     print(f"PyTorch: {torch.__version__}")
     print(f"CUDA: {'Да' if torch.cuda.is_available() else 'Нет'}")
@@ -343,14 +327,13 @@ def main():
     print(f"  Batch: {args.batch_size}")
     print(f"  LR:    {args.lr}")
     print(f"  Эпох:  {args.epochs_base} (базовая), {args.epochs if not args.base_only else 'пропуск'} (оптимизированная)")
-    print("="*70)
     
     # Проверка папок
     if not os.path.exists(args.train_dir):
-        print(f"\n✗ Папка train не найдена: {args.train_dir}")
+        print(f"\nПапка train не найдена: {args.train_dir}")
         return 1
     if not os.path.exists(args.test_dir):
-        print(f"\n✗ Папка test не найдена: {args.test_dir}")
+        print(f"\nПапка test не найдена: {args.test_dir}")
         return 1
     
     start_time = time.time()
@@ -360,16 +343,14 @@ def main():
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     
-    # ========== ЗАГРУЗКА ДАННЫХ ==========
-    print("\n" + "="*70)
-    print("  ЗАГРУЗКА ДАННЫХ")
-    print("="*70)
+    # Загружаем данные
+    print("\nЗАГРУЗКА ДАННЫХ")
     
     try:
-        train_dataset = EmotionDataset(args.train_dir, transform=get_transforms(augment=False))
-        test_dataset = EmotionDataset(args.test_dir, transform=get_transforms(augment=False))
+        train_dataset = EmotionDataset(args.train_dir, transform=get_transforms(augment=False), is_test=False)
+        test_dataset = EmotionDataset(args.test_dir, transform=get_transforms(augment=False), is_test=True)
     except Exception as e:
-        print(f"\n✗ Ошибка загрузки: {e}")
+        print(f"\nОшибка загрузки: {e}")
         return 1
     
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, 
@@ -380,33 +361,31 @@ def main():
                             num_workers=NUM_WORKERS, pin_memory=True if torch.cuda.is_available() else False,
                             persistent_workers=True if NUM_WORKERS > 0 else False)
     
-    print(f"\n[+] Train: {len(train_dataset)} фоток")
-    print(f"[+] Test:  {len(test_dataset)} фоток")
+    print(f"\n Train: {len(train_dataset)} фоток")
+    print(f" Test:  {len(test_dataset)} фоток")
     
-    # ========== БАЗОВАЯ МОДЕЛЬ ==========
-    print("\n" + "="*70)
-    print("  БАЗОВАЯ МОДЕЛЬ")
-    print("="*70)
+    # База
+    print("\nБАЗОВАЯ МОДЕЛЬ")
     
     base_model = BaseCNN(num_classes=NUM_CLASSES).to(DEVICE)
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     optimizer = optim.AdamW(base_model.parameters(), lr=args.lr, weight_decay=1e-4)
     scaler = torch.cuda.amp.GradScaler() if torch.cuda.is_available() else None
     
-    print(f"\n[+] Начинаю обучение ({args.epochs_base} эпох)...")
+    print(f"\nНачинаю обучение ({args.epochs_base} эпох)...")
     
     for epoch in range(args.epochs_base):
         print(f"\nЭпоха {epoch+1}/{args.epochs_base}")
         train_loss, train_acc = train_epoch(base_model, train_loader, criterion, optimizer, DEVICE, scaler)
         print(f"  Loss: {train_loss:.4f} | Acc: {train_acc:.2f}%")
     
-    print("\n[+] Оценка базовой модели...")
+    print("\n Оценка базовой модели...")
     y_pred_base, y_true_base, y_probs_base = evaluate_model(base_model, test_loader, DEVICE)
     base_accuracy, base_f1 = print_metrics(y_true_base, y_pred_base, "БАЗОВАЯ")
     
     base_model_path = os.path.join(args.output_dir, f'{PARTICIPANT_NAME}_base_model.pth')
     torch.save(base_model.state_dict(), base_model_path)
-    print(f"\n[+] Сохранено: {base_model_path}")
+    print(f"\nСохранено: {base_model_path}")
     
     plot_confusion_matrix(y_true_base, y_pred_base, 
                          os.path.join(args.output_dir, 'base_confusion_matrix.png'),
@@ -417,21 +396,16 @@ def main():
     
     if args.base_only:
         elapsed = time.time() - start_time
-        print("\n" + "="*70)
-        print("  ГОТОВО")
-        print("="*70)
+        print("\nГОТОВО")
         print(f"\nВремя: {elapsed/60:.2f} мин")
         print(f"Accuracy: {base_accuracy:.4f} ({base_accuracy*100:.2f}%)")
         print(f"F1-score: {base_f1:.4f}")
-        print("="*70)
         return 0
     
-    # ========== ОПТИМИЗИРОВАННАЯ МОДЕЛЬ ==========
-    print("\n" + "="*70)
-    print("  ОПТИМИЗИРОВАННАЯ МОДЕЛЬ (С АУГМЕНТАЦИЕЙ)")
-    print("="*70)
+    # Лучшая модель(F1)
+    print("\nОПТИМИЗИРОВАННАЯ МОДЕЛЬ (С АУГМЕНТАЦИЕЙ)")
     
-    train_dataset_aug = EmotionDataset(args.train_dir, transform=get_transforms(augment=True))
+    train_dataset_aug = EmotionDataset(args.train_dir, transform=get_transforms(augment=True), is_test=False)
     train_loader_aug = DataLoader(train_dataset_aug, batch_size=args.batch_size, shuffle=True, 
                                  num_workers=NUM_WORKERS, pin_memory=True if torch.cuda.is_available() else False,
                                  persistent_workers=True if NUM_WORKERS > 0 else False)
@@ -440,7 +414,7 @@ def main():
     optimizer_opt = optim.AdamW(opt_model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer_opt, mode='max', patience=5, factor=0.5, verbose=True)
     
-    print(f"\n[+] Начинаю обучение ({args.epochs} эпох)...")
+    print(f"\n Начинаю обучение ({args.epochs} эпох)...")
     
     best_acc = 0.0
     patience_counter = 0
@@ -456,24 +430,24 @@ def main():
         val_acc = accuracy_score(y_true_val, y_pred_val)
         scheduler.step(val_acc)
         
-        print(f"  Val Acc: {val_acc:.4f} ({val_acc*100:.2f}%)")
+        print(f"  Value Accuracy: {val_acc:.4f} ({val_acc*100:.2f}%)")
         
         if val_acc > best_acc:
             best_acc = val_acc
             patience_counter = 0
             torch.save(opt_model.state_dict(), opt_model_path)
-            print(f"  ✓ Лучшая модель! Acc: {val_acc:.4f}")
+            print(f"  Лучшая модель! Accuracy: {val_acc:.4f}")
         else:
             patience_counter += 1
             print(f"  Без улучшений. Patience: {patience_counter}/{patience_limit}")
         
         if patience_counter >= patience_limit:
-            print(f"\n[+] Early stopping на эпохе {epoch+1}")
+            print(f"\n Early stopping на эпохе {epoch+1}")
             break
     
     opt_model.load_state_dict(torch.load(opt_model_path))
     
-    print("\n[+] Оценка оптимизированной модели...")
+    print("\nОценка оптимизированной модели...")
     y_pred_opt, y_true_opt, y_probs_opt = evaluate_model(opt_model, test_loader, DEVICE)
     opt_accuracy, opt_f1 = print_metrics(y_true_opt, y_pred_opt, "ОПТИМИЗИРОВАННАЯ")
     
@@ -488,12 +462,10 @@ def main():
     f1_model_path = os.path.join(args.output_dir, f'{PARTICIPANT_NAME}_F1_model.pth')
     torch.save(opt_model.state_dict(), f1_model_path)
     
-    # ========== ИТОГ ==========
+    # ВЫВОД
     elapsed = time.time() - start_time
     
-    print("\n" + "="*70)
-    print("  ИТОГ")
-    print("="*70)
+    print("\nИТОГ")
     print(f"\nВремя: {elapsed/60:.2f} мин")
     print(f"\nБазовая:")
     print(f"  Accuracy: {base_accuracy:.4f} ({base_accuracy*100:.2f}%)")
@@ -504,9 +476,7 @@ def main():
     print(f"\nУлучшение:")
     print(f"  Accuracy: +{(opt_accuracy - base_accuracy)*100:.2f}%")
     print(f"  F1: +{(opt_f1 - base_f1):.4f}")
-    print(f"\n{'='*70}")
-    print("  ГОТОВО!")
-    print("="*70)
+    print("\nГОТОВО!")
     
     return 0
 
